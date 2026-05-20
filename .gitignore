@@ -1,0 +1,27 @@
+.direnv
+*.iml
+.gradle
+/local.properties
+/.idea
+.DS_Store
+/build
+/captures
+.externalNativeBuild
+.cxx
+local.properties
+*.apk
+*.aab
+*.ap_
+*.dex
+
+# Rust
+/target/
+**/target/
+
+# Android
+app/build/
+app/src/main/assets/*.onnx
+app/src/main/jniLibs/
+
+# Nix
+result
