@@ -10,9 +10,9 @@ XP MVP slice — replace the Rust stub with real ONNX inference using the Parake
 
 **Acceptance Criteria:**
 - [ ] `cargo ndk -t arm64-v8a build --release` compiles the Rust crate without errors
-- [ ] The output `libtranscribe.so` (or named per convention) is placed in `app/src/main/jniLibs/arm64-v8a/`
+- [ ] The output `libparakeet_jni.so` is placed in `app/src/main/jniLibs/arm64-v8a/`
 - [ ] The `.so` is included in the debug APK (verify with `adb shell run-as` or by inspecting the APK)
-- [ ] `System.loadLibrary("transcribe")` in Kotlin loads the native library without `UnsatisfiedLinkError`
+- [ ] `System.loadLibrary("parakeet_jni")` in Kotlin loads the native library without `UnsatisfiedLinkError`
 - [ ] The build is integrated into the Gradle build process (either via `exec` task or manual step documented in README)
 
 **Notes:**
@@ -22,36 +22,45 @@ Consider adding a Gradle task that runs `cargo ndk` and copies the output to `jn
 
 ### US-014: Rust JNI function loads Parakeet TDT int8 ONNX model from Android assets
 
-**As a** the Rust layer, **I want** to load the Parakeet TDT ONNX model from the Android asset directory **so that** I can perform inference on audio data.
+**As a** the Rust layer, **I want** to load the Parakeet TDT ONNX model files from the Android asset directory **so that** I can perform inference on audio data.
 
 **Acceptance Criteria:**
-- [ ] A Rust function `Java_..._loadModel(env, path)` accepts the model file path as a string
-- [ ] The function uses `transcribe-rs` (or ONNX Runtime directly) to load the int8 quantized Parakeet model
+- [ ] A Rust function `Java_..._loadModel(env, path)` accepts the model directory path as a string
+- [ ] The function loads all model files from `istupakov/parakeet-tdt-0.6b-v3-onnx` (HuggingFace):
+  - `encoder-model.int8.onnx` (652 MB) — int8 quantized encoder
+  - `decoder_joint-model.int8.onnx` (18 MB) — int8 quantized decoder/joint
+  - `nemo128.onnx` (140 KB) — feature extraction preprocessor
+  - `vocab.txt` (92 KB) — vocabulary file
+- [ ] The function uses `transcribe-rs` (Parakeet engine, `onnx` feature) to load the int8 quantized model
 - [ ] Model loading succeeds without errors (log the model metadata or input/output shapes as confirmation)
 - [ ] The model is loaded once and reused across recognition sessions (not re-loaded on every utterance)
 - [ ] Model loading fails gracefully with a meaningful error if the file is missing or corrupt
 - [ ] Kotlin calls `loadModel()` during service initialization (e.g., `onCreate()`)
 
 **Notes:**
-The model is ~670 MB. Loading may take a few seconds on first run. Consider loading on a background thread with a "loading" state. The model file lives in `app/src/main/assets/` and is accessed via `context.assets.open()` or by copying to a temp file path that Rust can read. Rust cannot read Android assets directly — Kotlin must extract the path.
+The model is ~670 MB total (four files). Loading may take a few seconds on first run. Consider loading on a background thread with a "loading" state. The model files live in `app/src/main/assets/` and are accessed via `context.assets.open()` or by copying to a temp file path that Rust can read. Rust cannot read Android assets directly — Kotlin must extract the path.
 
 ---
 
 ### US-015: Gradle task to download Parakeet model from HuggingFace with SHA-256 verification
 
-**As a** developer, **I want** the Parakeet model to be automatically downloaded during the Gradle build **so that** I don't have to manually manage a 670 MB file.
+**As a** developer, **I want** the Parakeet model files to be automatically downloaded during the Gradle build **so that** I don't have to manually manage ~670 MB of files.
 
 **Acceptance Criteria:**
-- [ ] A Gradle task (e.g., `downloadModel`) downloads the Parakeet TDT int8 ONNX model from HuggingFace
-- [ ] The downloaded file is placed in `app/src/main/assets/`
-- [ ] The task verifies the file's SHA-256 hash against a known good value
+- [ ] A Gradle task (e.g., `downloadModel`) downloads the Parakeet TDT int8 ONNX model files from `istupakov/parakeet-tdt-0.6b-v3-onnx` on HuggingFace
+- [ ] Downloaded files are placed in `app/src/main/assets/`:
+  - `encoder-model.int8.onnx` (652 MB)
+  - `decoder_joint-model.int8.onnx` (18 MB)
+  - `nemo128.onnx` (140 KB)
+  - `vocab.txt` (92 KB)
+- [ ] The task verifies each file's SHA-256 hash against a known good value
 - [ ] If the hash doesn't match, the task fails with a clear error
 - [ ] If the file already exists and hash matches, the download is skipped (idempotent)
 - [ ] The task runs before `assembleDebug` / `assembleRelease` (task dependency)
 - [ ] The model file is in `.gitignore` — it is never committed to the repo
 
 **Notes:**
-Use a Gradle `download` task (via a plugin or plain `ant.get`) with a `onlyIf` guard. Store the expected SHA-256 in a constant in the build script. The model URL should be pinned to a specific revision/release from HuggingFace.
+Use a Gradle `download` task (via a plugin or plain `ant.get`) with a `onlyIf` guard. Store the expected SHA-256 in a constant in the build script. The model URL should be pinned to a specific revision/release from `istupakov/parakeet-tdt-0.6b-v3-onnx` on HuggingFace.
 
 ---
 

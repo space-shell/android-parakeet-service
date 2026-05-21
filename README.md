@@ -8,13 +8,13 @@ This app implements Android's `RecognitionService` API, exposing the Parakeet TD
 
 ## Key Details
 
-- **Model**: NVIDIA Parakeet TDT 0.6b v3, running via ONNX Runtime (int8 quantized, ~670 MB)
-- **Rust integration**: Uses [transcribe-rs](https://github.com/cjpais/transcribe-rs) (compiled as a cdylib via `cargo-ndk`) for the transcription engine, bridged to Android via JNI
+- **Model**: NVIDIA Parakeet TDT 0.6b v3, int8 quantized ONNX (~670 MB) from [istupakov/parakeet-tdt-0.6b-v3-onnx](https://huggingface.co/istupakov/parakeet-tdt-0.6b-v3-onnx)
+- **Rust integration**: Uses [transcribe-rs](https://github.com/cjpais/transcribe-rs) v0.3.11 (compiled as a cdylib via `cargo-ndk`) for the transcription engine, bridged to Android via JNI
 - **Transcription mode**: Batch/offline (record, then transcribe)
 - **Android API**: Implements `RecognitionService` so other apps can use it through the standard `SpeechRecognizer` framework
 - **Minimum SDK**: Android 12 (API 31)
 - **Tech stack**: Kotlin + Jetpack Compose (minimal settings UI), Rust + NDK for native inference
-- **Architecture**: Fresh project, inspired by but not forked from [notune/android_transcribe_app](https://github.com/notune/android_transcribe_app)
+- **Build system**: Nix flakes for hermetic, reproducible builds
 
 ## What This Enables
 
@@ -24,47 +24,59 @@ This app implements Android's `RecognitionService` API, exposing the Parakeet TD
 
 ## What It Doesn't Do
 
-Unlike the reference app (notune/android_transcribe_app), this project does not provide:
+Unlike the reference app ([notune/android_transcribe_app](https://github.com/notune/android_transcribe_app)), this project does not provide:
 
 - IME / keyboard input method
 - Live subtitles / captions
 - Real-time streaming transcription — batch only
 
-## Prerequisites
+## Building
+
+### NixOS (recommended)
+
+```bash
+# Enter dev shell
+nix develop
+
+# Build debug APK (FHS env required for AAPT2 compatibility on NixOS)
+nix develop --command bash -c 'android-build-env -c "./gradlew assembleDebug"'
+# Output: app/build/outputs/apk/debug/app-debug.apk
+
+# Build release APK
+nix develop --command bash -c 'android-build-env -c "./gradlew assembleRelease"'
+# Output: app/build/outputs/apk/release/app-release.apk
+```
+
+### Non-Nix systems
+
+Prerequisites:
 
 | Dependency | Installation |
 |---|---|
 | JDK 17 | Android Studio (bundled) or system JDK 17 |
-| Android SDK | Via Android Studio or `sdkmanager` |
-| Android NDK | `sdkmanager "ndk;28.0.13004108"` |
-| Rust | [rustup.rs](https://rustup.rs) + `rustup target add aarch64-linux-android` |
+| Android SDK 34 | Via Android Studio or `sdkmanager` |
+| Android NDK 26.3.11579264 | `sdkmanager "ndk;26.3.11579264"` |
+| Rust (stable) | [rustup.rs](https://rustup.rs) + `rustup target add aarch64-linux-android` |
 | cargo-ndk | `cargo install cargo-ndk` |
 
-## Building
-
 ```bash
-# Debug APK
+export ANDROID_HOME=/path/to/Android/Sdk
+export ANDROID_NDK_HOME=$ANDROID_HOME/ndk/26.3.11579264
 ./gradlew assembleDebug
-# Output: app/build/outputs/apk/debug/app-debug.apk
-
-# Release APK
-./gradlew assembleRelease
-# Output: app/build/outputs/apk/release/app-release.apk
-
-# Release AAB (Google Play)
-./gradlew bundleRelease
-# Output: app/build/outputs/bundle/release/app-release.aab
 ```
 
-### Local Configuration
+### Model Assets
 
-Create a `local.properties` file in the project root (gitignored):
+Parakeet TDT model files (~670 MB) are automatically downloaded from HuggingFace during the first build via the `downloadModel` Gradle task. No manual download needed.
 
-```
-sdk.dir=/path/to/your/Android/Sdk
-```
+Model files placed in `app/src/main/assets/`:
 
-If your default Java is not JDK 17, set `org.gradle.java.home` in `gradle.properties`.
+| File | Size | Purpose |
+|---|---|---|
+| `encoder-model.int8.onnx` | 652 MB | Encoder network |
+| `decoder_joint-model.int8.onnx` | 18 MB | Decoder + joint network |
+| `nemo128.onnx` | 140 KB | Feature extraction preprocessor |
+| `vocab.txt` | 92 KB | Token vocabulary |
 
 ### Release Signing
 
@@ -76,26 +88,22 @@ export KEY_PASS=yourpassword
 export STORE_PASS=yourpassword
 ```
 
-### Model Assets
-
-Parakeet TDT model files (~670 MB) are downloaded from HuggingFace during the first build via a Gradle task. Checksums are verified with SHA-256. No manual download needed.
-
 ## Project Structure
 
 ```
 ├── app/
 │   └── src/main/
 │       ├── AndroidManifest.xml
-│       ├── kotlin/              # Kotlin Android code (RecognitionService, UI)
-│       ├── res/                 # Resources (layouts, drawables, etc.)
-│       ├── assets/              # Model files (downloaded at build time)
-│       └── jniLibs/             # Native .so files (built by cargo-ndk)
-├── src/                         # Rust source code (cdylib for JNI)
-├── transcribe-rs/               # transcribe-rs dependency (submodule or vendored)
-├── Cargo.toml                   # Rust workspace config
-├── build.gradle.kts             # Root Gradle config
-├── settings.gradle.kts
-└── gradle.properties
+│       ├── kotlin/com/parakeet/service/   # Kotlin Android code
+│       ├── res/                           # Resources
+│       ├── assets/                        # Model files (downloaded at build time)
+│       └── jniLibs/arm64-v8a/             # libparakeet_jni.so (built by cargo-ndk)
+├── src/lib.rs                             # Rust JNI bridge + transcription
+├── Cargo.toml                             # Rust crate config
+├── flake.nix                              # Nix dev shell + FHS build env
+├── build.gradle.kts                       # Root Gradle config
+├── app/build.gradle.kts                   # App module (AGP 8.5.2, Kotlin 2.0.21)
+└── settings.gradle.kts
 ```
 
 ## License

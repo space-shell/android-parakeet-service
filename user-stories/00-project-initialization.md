@@ -11,7 +11,7 @@ XP MVP pre-step — scaffold the entire project so that all subsequent slices ha
 
 ### US-001: Set up Nix flake with all build dependencies
 
-**As a** developer, **I want** a Nix flake that provides JDK 17, Android SDK, NDK 28.0.13004108, Rust with the `aarch64-linux-android` target, and `cargo-ndk` **so that** I can build the entire project in a reproducible, hermetic environment without Android Studio.
+**As a** developer, **I want** a Nix flake that provides JDK 17, Android SDK, NDK 26.3.11579264, Rust with the `aarch64-linux-android` target, and `cargo-ndk` **so that** I can build the entire project in a reproducible, hermetic environment without Android Studio.
 
 **Acceptance Criteria:**
 - [ ] `flake.nix` exists at the project root with `nix develop` shell providing all tools
@@ -33,9 +33,9 @@ Use `android-nixpkgs` or similar to provide the Android SDK/NDX declaratively. C
 - [ ] `settings.gradle.kts` exists at root, including the `:app` module
 - [ ] Root `build.gradle.kts` configures Android Gradle Plugin, Kotlin, and Compose
 - [ ] `app/build.gradle.kts` configures:
-  - `minSdk = 31`, `targetSdk` appropriate for the device
+  - `minSdk = 31`, `targetSdk = 34`, `compileSdk = 34`
   - Kotlin with Jetpack Compose
-  - NDK version `28.0.13004108`
+  - NDK version `26.3.11579264`
   - JNI lib directories pointing to `app/src/main/jniLibs/`
 - [ ] `gradle.properties` sets JVM args and AndroidX flags
 - [ ] Gradle wrapper (`gradlew`) is committed and functional
@@ -53,7 +53,7 @@ The APK at this stage is an empty shell — no service implementation yet. This 
 **Acceptance Criteria:**
 - [ ] `Cargo.toml` exists at project root with `[lib] crate-type = ["cdylib"]`
 - [ ] `src/lib.rs` exists with a minimal JNI entry point (e.g., a `Java_..._hello` function that returns a string)
-- [ ] `cargo ndk -t arm64-v8a build --release` produces `libtranscribe.so` (or similar) for `aarch64-linux-android`
+- [ ] `cargo ndk -t arm64-v8a build --release` produces `libparakeet_jni.so` for `aarch64-linux-android`
 - [ ] The built `.so` is placed into `app/src/main/jniLibs/arm64-v8a/`
 - [ ] Kotlin can call the JNI function and receive the response
 
@@ -67,13 +67,13 @@ This is a scaffold — the actual transcription engine comes in Slice 3. The goa
 **As a** developer, **I want** `transcribe-rs` available as a Rust dependency with the `onnx` feature and Parakeet engine **so that** I can use it for speech recognition inference in later slices.
 
 **Acceptance Criteria:**
-- [ ] `transcribe-rs` is included as a git submodule at `transcribe-rs/` or declared as a git dependency in `Cargo.toml`
+- [ ] `transcribe-rs` is declared as a git dependency in `Cargo.toml` (not a submodule)
 - [ ] `Cargo.toml` depends on `transcribe-rs` with features `["onnx"]` and the Parakeet engine enabled
 - [ ] `cargo check` succeeds with the dependency resolved
 - [ ] The crate compiles for the `aarch64-linux-android` target
 
 **Notes:**
-Reference: https://github.com/cjpais/transcribe-rs. A git submodule is preferred for offline reproducibility. Verify the feature flags needed for Parakeet TDT specifically.
+Reference: https://github.com/cjpais/transcribe-rs. Declared as a git dependency in `Cargo.toml` using `[dependencies]` with `git = "..."`. Verify the feature flags needed for Parakeet TDT specifically.
 
 ---
 
@@ -100,7 +100,7 @@ The service class itself is a stub at this point — just enough for Android to 
 **As a** developer, **I want** to build and install the app on a physical device entirely from the command line **so that** I can iterate without Android Studio.
 
 **Acceptance Criteria:**
-- [ ] `nix develop --command ./gradlew assembleDebug` produces a debug APK
+- [ ] `nix develop --command bash -c 'android-build-env -c "./gradlew assembleDebug"'` produces a debug APK (FHS env required on NixOS for AAPT2 compatibility)
 - [ ] `adb install app/build/outputs/apk/debug/app-debug.apk` installs on device
 - [ ] `adb shell am start` launches the app (even if it's just a blank activity)
 - [ ] `adb logcat` shows no crash on launch

@@ -9,37 +9,65 @@ Reference project (not a fork): [notune/android_transcribe_app](https://github.c
 ## Commands
 
 ```bash
-./gradlew assembleDebug       # Debug APK → app/build/outputs/apk/debug/
-./gradlew assembleRelease     # Release APK → app/build/outputs/apk/release/
-./gradlew bundleRelease       # Release AAB → app/build/outputs/bundle/release/
+# Enter dev shell (Nix)
+nix develop
+
+# Build debug APK (must use FHS env for NixOS AAPT2 compatibility)
+nix develop --command bash -c 'android-build-env -c "./gradlew assembleDebug"'
+
+# Build release APK
+nix develop --command bash -c 'android-build-env -c "./gradlew assembleRelease"'
+
+# Build Rust only
+nix develop --command bash -c 'cargo ndk -t arm64-v8a --platform 31 build --release'
+
+# Check Rust for Android target
+nix develop --command bash -c 'cargo ndk -t arm64-v8a check'
+
+# Run individual Gradle tasks
+nix develop --command bash -c 'android-build-env -c "./gradlew :app:buildRustRelease"'
+nix develop --command bash -c 'android-build-env -c "./gradlew :app:downloadModel"'
 ```
 
-Requires JDK 17, Android SDK, Android NDK (28.0.13004108), Rust with `aarch64-linux-android` target, and `cargo-ndk`.
-
-_TBD: test, lint, typecheck commands once tooling is in place._
+Tooling: JDK 17, Android SDK 34, NDK 26.3.11579264, Rust (stable) with `aarch64-linux-android` target, `cargo-ndk`. All provided via Nix flake.
 
 ## Architecture
 
 **Two-language project**: Kotlin (Android) + Rust (transcription engine via JNI).
 
-- **Kotlin layer** (`app/src/main/kotlin/`): Implements `RecognitionService`, handles audio capture from microphone, manages the RecognitionService lifecycle, minimal settings UI via Jetpack Compose
-- **Rust layer** (`src/`): Compiles as a `cdylib` crate, uses [transcribe-rs](https://github.com/cjpais/transcribe-rs) (feature `onnx`, Parakeet engine) for ONNX inference. Bridged to Kotlin via JNI
-- **Native libs** (`app/src/main/jniLibs/`): Rust `.so` files built by `cargo-ndk`, populated during Gradle build
-- **Model assets** (`app/src/main/assets/`): Parakeet TDT int8 ONNX model (~670 MB), auto-downloaded from HuggingFace at build time via Gradle task with SHA-256 verification
+- **Kotlin layer** (`app/src/main/kotlin/com/parakeet/service/`): Implements `RecognitionService`, handles audio capture from microphone, manages the RecognitionService lifecycle, minimal settings UI via Jetpack Compose
+- **Rust layer** (`src/`): Compiles as a `cdylib` crate (`libparakeet_jni.so`), uses [transcribe-rs](https://github.com/cjpais/transcribe-rs) v0.3.11 (feature `onnx`, Parakeet engine) for ONNX inference. Bridged to Kotlin via JNI
+- **Native libs** (`app/src/main/jniLibs/arm64-v8a/`): Rust `.so` built by `cargo-ndk`, populated during Gradle build via `copyRustSo` task
+- **Model assets** (`app/src/main/assets/`): Parakeet TDT int8 ONNX model (~670 MB total), auto-downloaded from [istupakov/parakeet-tdt-0.6b-v3-onnx](https://huggingface.co/istupakov/parakeet-tdt-0.6b-v3-onnx) at build time via `downloadModel` Gradle task
+  - `encoder-model.int8.onnx` (652 MB)
+  - `decoder_joint-model.int8.onnx` (18 MB)
+  - `nemo128.onnx` (140 KB) — feature extraction preprocessor
+  - `vocab.txt` (92 KB)
 - **Min SDK**: API 31 (Android 12)
+- **Target/Compile SDK**: 34
 - **Transcription mode**: Batch/offline only — record audio segment, then transcribe
 
 ### Key Android integration points
 
 - `RecognitionService` subclass — the core service that other apps invoke via `SpeechRecognizer`
-- Must be declared in `AndroidManifest.xml` with the `android.permission.RECORD_AUDIO` permission
-- User must enable this app as their voice input service in system Settings → Voice Input
+- Must be declared in `AndroidManifest.xml` with `android.permission.RECORD_AUDIO` permission
+- User must enable this app as their voice input service in Settings → Voice Input
+
+## NixOS Development
+
+The project uses Nix flakes for hermetic builds. On NixOS, Gradle's AAPT2 binary is a prebuilt FHS executable that won't run under the standard Nix shell. The flake provides `android-build-env`, an FHS environment wrapper that creates a standard Linux filesystem layout for build tooling.
+
+- **`nix develop`**: Provides all tools (JDK, Rust, Android SDK/NDK, Gradle, cargo-ndk)
+- **`android-build-env -c "..."`**: Runs commands inside an FHS chroot for AAPT2 compatibility
+- **`patch-aapt2`**: Legacy fallback — patches AAPT2 binaries in Gradle cache (prefer FHS env)
 
 ## Conventions
 
 - Kotlin for all Android code; Rust for native transcription
 - Jetpack Compose for UI (minimal — settings only)
 - Model is int8 quantized Parakeet; audio input must be 16 kHz mono 16-bit PCM
-- `transcribe-rs` included as a git submodule or vendored dependency under `transcribe-rs/`
-
-_TBD: add style, formatting, and workflow conventions as they emerge._
+- `transcribe-rs` included as a git dependency in `Cargo.toml` (not a submodule)
+- AGP 8.5.2, Kotlin 2.0.21, Compose BOM 2024.10.01
+- Android arm64-v8a only (no x86, armeabi-v7a targets)
+- Commit often with descriptive messages
+- Verify builds after changes: `android-build-env -c "./gradlew assembleDebug"`
