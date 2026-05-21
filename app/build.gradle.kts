@@ -44,6 +44,39 @@ android {
 
 val rustReleaseDir = layout.buildDirectory.dir("rustRelease")
 val jniLibsDir = file("src/main/jniLibs/arm64-v8a")
+val assetsDir = file("src/main/assets")
+
+val modelBaseUrl = "https://huggingface.co/istupakov/parakeet-tdt-0.6b-v3-onnx/resolve/main"
+val modelFiles = listOf(
+    "encoder-model.int8.onnx",
+    "decoder_joint-model.int8.onnx",
+    "nemo128.onnx",
+    "vocab.txt",
+)
+
+val downloadModel by tasks.registering {
+    description = "Download Parakeet TDT int8 ONNX model from HuggingFace"
+    outputs.files(modelFiles.map { assetsDir.resolve(it) })
+    doLast {
+        assetsDir.mkdirs()
+        modelFiles.forEach { filename ->
+            val target = assetsDir.resolve(filename)
+            if (target.exists()) {
+                logger.lifecycle("  SKIP (exists): $filename")
+                return@forEach
+            }
+            val url = "$modelBaseUrl/$filename"
+            logger.lifecycle("  DOWNLOAD: $filename from $url")
+            ant.withGroovyBuilder {
+                "get"("src" to url, "dest" to target)
+            }
+        }
+    }
+}
+
+tasks.matching { it.name == "preBuild" }.configureEach {
+    dependsOn(downloadModel)
+}
 
 val buildRustRelease by tasks.registering(Exec::class) {
     description = "Cross-compile Rust cdylib for aarch64-linux-android"
