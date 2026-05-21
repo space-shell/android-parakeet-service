@@ -40,6 +40,32 @@
 
         jdk = pkgs.jdk17;
 
+        buildTools = pkgs.buildFHSEnv {
+          name = "android-build-env";
+          targetPkgs = pkgs: [
+            jdk
+            rustToolchain
+            pkgs.cargo-ndk
+            androidSdk
+            pkgs.git
+            pkgs.curl
+            pkgs.cacert
+            pkgs.zlib
+            pkgs.stdenv.cc.cc.lib
+          ];
+          runScript = "bash";
+          profile = ''
+            export ANDROID_HOME="${androidSdk}/libexec/android-sdk"
+            export ANDROID_SDK_ROOT="${androidSdk}/libexec/android-sdk"
+            export ANDROID_NDK_HOME="${androidNdkHome}"
+            export NDK_HOME="${androidNdkHome}"
+            export JAVA_HOME="${jdk.home}"
+            export GRADLE_OPTS="-Dorg.gradle.daemon=false -Xmx4g"
+            export ANDROID_USE_ANDROIDX="true"
+            export PATH="$PATH:${pkgs.gradle}/bin:${rustToolchain}/bin:${pkgs.cargo-ndk}/bin"
+          '';
+        };
+
       in {
         devShells.default = pkgs.mkShell {
           name = "android-parakeet-service";
@@ -54,6 +80,7 @@
             curl
             cacert
             pkg-config
+            buildTools
           ];
 
           ANDROID_HOME = "${androidSdk}/libexec/android-sdk";
@@ -73,6 +100,8 @@
             echo "  cargo-ndk:  $(cargo ndk --version 2>&1 || echo 'not found')"
             echo "  ANDROID_HOME=$ANDROID_HOME"
             echo "  NDK_HOME=$NDK_HOME"
+            echo ""
+            echo "If Gradle fails with AAPT2 errors, run: android-build-env -c './gradlew assembleDebug'"
           '';
         };
       });
