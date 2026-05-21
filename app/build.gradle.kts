@@ -42,6 +42,54 @@ android {
     }
 }
 
+val rustReleaseDir = layout.buildDirectory.dir("rustRelease")
+val jniLibsDir = file("src/main/jniLibs/arm64-v8a")
+
+val buildRustRelease by tasks.registering(Exec::class) {
+    description = "Cross-compile Rust cdylib for aarch64-linux-android"
+    workingDir = rootProject.file(".")
+    val ndkHome = System.getenv("ANDROID_NDK_HOME") ?: System.getenv("NDK_HOME") ?: ""
+    environment("ANDROID_NDK_HOME", ndkHome)
+    environment("NDK_HOME", ndkHome)
+    val toolchain = if (System.getProperty("os.name").lowercase().contains("linux")) {
+        "linux-x86_64"
+    } else {
+        "darwin-x86_64"
+    }
+    val ar = if (ndkHome.isNotEmpty()) {
+        "$ndkHome/toolchains/llvm/prebuilt/$toolchain/bin/llvm-ar"
+    } else { "ar" }
+    val linker = if (ndkHome.isNotEmpty()) {
+        "$ndkHome/toolchains/llvm/prebuilt/$toolchain/bin/aarch64-linux-android33-clang"
+    } else { "gcc" }
+    commandLine(
+        "cargo", "ndk", "-t", "arm64-v8a",
+        "--platform", "31",
+        "build", "--release"
+    )
+    environment("AR_aarch64_linux_android", ar)
+    environment("CARGO_TARGET_AARCH64_LINUX_ANDROID_LINKER", linker)
+    inputs.file(rootProject.file("Cargo.toml"))
+    inputs.file(rootProject.file("Cargo.lock"))
+    inputs.dir(rootProject.file("src"))
+    outputs.dir(rootProject.file("target/aarch64-linux-android/release"))
+}
+
+val copyRustSo by tasks.registering(Copy::class) {
+    description = "Copy built .so into jniLibs"
+    dependsOn(buildRustRelease)
+    from(rootProject.file("target/aarch64-linux-android/release/libparakeet_jni.so"))
+    into(jniLibsDir)
+}
+
+tasks.matching { it.name.startsWith("merge") && it.name.endsWith("JniLibFolders") }.configureEach {
+    dependsOn(copyRustSo)
+}
+
+tasks.matching { it.name == "preBuild" }.configureEach {
+    dependsOn(copyRustSo)
+}
+
 dependencies {
     implementation(platform("androidx.compose:compose-bom:2024.10.01"))
     implementation("androidx.core:core-ktx:1.12.0")
