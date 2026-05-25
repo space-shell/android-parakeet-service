@@ -11,6 +11,7 @@ import android.speech.SpeechRecognizer
 import android.util.Log
 import java.io.ByteArrayOutputStream
 import java.io.File
+import java.util.concurrent.atomic.AtomicBoolean
 
 class ParakeetRecognitionService : RecognitionService() {
 
@@ -25,25 +26,32 @@ class ParakeetRecognitionService : RecognitionService() {
     private var audioRecord: AudioRecord? = null
     private var audioBuffer: ByteArrayOutputStream? = null
     private var recordingThread: Thread? = null
-    @Volatile
-    private var isRecording = false
-    private var currentCallback: Callback? = null
+    private var inferenceThread: Thread? = null
+    private val isRecording = AtomicBoolean(false)
+    private val isProcessing = AtomicBoolean(false)
     private var modelLoaded = false
+    private var modelDir: File? = null
 
     override fun onCreate() {
         super.onCreate()
-        loadModel()
+        Thread { loadModel() }.start()
     }
 
     private fun loadModel() {
         try {
-            val modelDir = File(filesDir, "parakeet-model")
-            if (!modelDir.exists()) {
-                modelDir.mkdirs()
-                copyModelAssets(modelDir)
+            val dir = File(filesDir, "parakeet-model")
+            if (!dir.exists()) {
+                dir.mkdirs()
+                copyModelAssets(dir)
             }
-            modelLoaded = NativeLib.loadModel(modelDir.absolutePath)
-            if (!modelLoaded) {
+            modelDir = dir
+            val success = NativeLib.loadModel(dir.absolutePath)
+            synchronized(this) {
+                modelLoaded = success
+            }
+            if (success) {
+                Log.i(TAG, "Model loaded successfully")
+            } else {
                 Log.e(TAG, "Model load failed")
             }
         } catch (e: Exception) {
@@ -59,18 +67,22 @@ class ParakeetRecognitionService : RecognitionService() {
             "vocab.txt"
         )
         for (filename in modelFiles) {
+            val target = File(targetDir, filename)
+            if (target.exists() && target.length() > 0) {
+                Log.d(TAG, "SKIP (exists): $filename")
+                continue
+            }
             assets.open(filename).use { input ->
-                File(targetDir, filename).outputStream().use { output ->
+                target.outputStream().use { output ->
                     input.copyTo(output)
                 }
             }
-            Log.d(TAG, "Copied model asset: $filename")
+            Log.d(TAG, "Copied model asset: $filename (${target.length()} bytes)")
         }
     }
 
     override fun onStartListening(intent: android.content.Intent, callback: Callback) {
         Log.d(TAG, "onStartListening")
-        currentCallback = callback
 
         if (checkSelfPermission(Manifest.permission.RECORD_AUDIO) != PackageManager.PERMISSION_GRANTED) {
             Log.e(TAG, "RECORD_AUDIO permission not granted")
@@ -78,9 +90,17 @@ class ParakeetRecognitionService : RecognitionService() {
             return
         }
 
-        if (!modelLoaded) {
-            Log.e(TAG, "Model not loaded")
-            callback.error(SpeechRecognizer.ERROR_CLIENT)
+        synchronized(this) {
+            if (!modelLoaded) {
+                Log.e(TAG, "Model not loaded")
+                callback.error(SpeechRecognizer.ERROR_CLIENT)
+                return
+            }
+        }
+
+        if (!isProcessing.compareAndSet(false, true)) {
+            Log.w(TAG, "Recognition already in progress, rejecting")
+            callback.error(SpeechRecognizer.ERROR_RECOGNIZER_BUSY)
             return
         }
 
@@ -88,6 +108,7 @@ class ParakeetRecognitionService : RecognitionService() {
         if (bufferSize == AudioRecord.ERROR || bufferSize == AudioRecord.ERROR_BAD_VALUE) {
             Log.e(TAG, "Invalid buffer size")
             callback.error(SpeechRecognizer.ERROR_AUDIO)
+            isProcessing.set(false)
             return
         }
 
@@ -104,6 +125,7 @@ class ParakeetRecognitionService : RecognitionService() {
                 Log.e(TAG, "AudioRecord not initialized")
                 callback.error(SpeechRecognizer.ERROR_AUDIO)
                 releaseAudioRecord()
+                isProcessing.set(false)
                 return
             }
 
@@ -111,12 +133,12 @@ class ParakeetRecognitionService : RecognitionService() {
             val maxBytes = SAMPLE_RATE * 2 * MAX_DURATION_SECS
 
             audioRecord?.startRecording()
-            isRecording = true
+            isRecording.set(true)
             callback.beginningOfSpeech()
 
             recordingThread = Thread {
                 val readBuffer = ShortArray(bufferSize / 2)
-                while (isRecording) {
+                while (isRecording.get()) {
                     val readCount = audioRecord?.read(readBuffer, 0, readBuffer.size) ?: 0
                     if (readCount > 0) {
                         val byteBuffer = ByteArray(readCount * 2)
@@ -129,31 +151,45 @@ class ParakeetRecognitionService : RecognitionService() {
                             val buf = audioBuffer
                             if (buf != null && buf.size() < maxBytes) {
                                 buf.write(byteBuffer)
+                            } else {
+                                Log.w(TAG, "Audio buffer full, stopping recording")
+                                isRecording.set(false)
                             }
                         }
-                    } else {
+                    } else if (readCount < 0) {
+                        Log.e(TAG, "AudioRecord.read error: $readCount")
                         break
                     }
                 }
-            }.also { it.start() }
+                Log.d(TAG, "Recording thread finished")
+            }.also { it.name = "parakeet-audio-capture"; it.start() }
         } catch (e: SecurityException) {
             Log.e(TAG, "SecurityException during audio recording", e)
             callback.error(SpeechRecognizer.ERROR_INSUFFICIENT_PERMISSIONS)
             releaseAudioRecord()
+            isProcessing.set(false)
         } catch (e: Exception) {
             Log.e(TAG, "Error starting audio recording", e)
             callback.error(SpeechRecognizer.ERROR_AUDIO)
             releaseAudioRecord()
+            isProcessing.set(false)
         }
     }
 
     override fun onStopListening(callback: Callback) {
         Log.d(TAG, "onStopListening")
-        isRecording = false
+        isRecording.set(false)
+
         recordingThread?.join(3000)
+        if (recordingThread?.isAlive == true) {
+            Log.w(TAG, "Recording thread did not finish in time")
+            recordingThread?.interrupt()
+        }
         recordingThread = null
 
-        audioRecord?.stop()
+        try {
+            audioRecord?.stop()
+        } catch (_: Exception) {}
 
         val audioData: ByteArray
         synchronized(this) {
@@ -161,22 +197,26 @@ class ParakeetRecognitionService : RecognitionService() {
             audioBuffer = null
         }
 
-        Log.d(TAG, "Captured ${audioData.size} bytes of audio")
+        Log.d(TAG, "Captured ${audioData.size} bytes of audio (${audioData.size / 2} samples)")
 
         if (audioData.isEmpty()) {
+            Log.d(TAG, "No audio captured, returning empty result")
             returnEmptyResult(callback)
             releaseAudioRecord()
+            isProcessing.set(false)
             return
         }
 
-        Thread {
+        inferenceThread = Thread {
             try {
                 val transcription = NativeLib.transcribe(audioData)
                 val text = transcription.trim()
 
                 if (text.isEmpty()) {
+                    Log.d(TAG, "Transcription returned empty text")
                     returnEmptyResult(callback)
                 } else {
+                    Log.i(TAG, "Transcription result: \"$text\"")
                     val bundle = Bundle().apply {
                         putStringArrayList(
                             RecognizerIntent.EXTRA_RESULTS,
@@ -189,30 +229,43 @@ class ParakeetRecognitionService : RecognitionService() {
                     }
                     callback.results(bundle)
                 }
+            } catch (e: UnsatisfiedLinkError) {
+                Log.e(TAG, "JNI library not loaded", e)
+                callback.error(SpeechRecognizer.ERROR_CLIENT)
             } catch (e: Exception) {
                 Log.e(TAG, "Transcription error", e)
                 callback.error(SpeechRecognizer.ERROR_CLIENT)
+            } finally {
+                releaseAudioRecord()
+                isProcessing.set(false)
             }
-            releaseAudioRecord()
-        }.start()
+        }.also { it.name = "parakeet-inference"; it.start() }
     }
 
     override fun onCancel(callback: Callback) {
         Log.d(TAG, "onCancel")
-        isRecording = false
+        isRecording.set(false)
         recordingThread?.join(1000)
+        recordingThread?.interrupt()
         recordingThread = null
         releaseAudioRecord()
+        isProcessing.set(false)
     }
 
     override fun onDestroy() {
         Log.d(TAG, "onDestroy")
-        isRecording = false
+        isRecording.set(false)
+
         recordingThread?.join(2000)
+        recordingThread?.interrupt()
         recordingThread = null
+
+        inferenceThread?.join(5000)
+        inferenceThread?.interrupt()
+        inferenceThread = null
+
         releaseAudioRecord()
         NativeLib.destroy()
-        currentCallback = null
         super.onDestroy()
     }
 

@@ -1,4 +1,5 @@
 use std::sync::Mutex;
+use std::time::Instant;
 
 use jni::objects::{JByteArray, JClass, JString};
 use jni::sys::{jboolean, JNI_FALSE, JNI_TRUE};
@@ -23,6 +24,7 @@ pub extern "system" fn Java_com_parakeet_service_NativeLib_loadModel<'a>(
 
     log::info!("Loading Parakeet model from: {}", dir);
 
+    let load_start = Instant::now();
     let model = match ParakeetModel::load(std::path::Path::new(&dir), &Quantization::Int8) {
         Ok(m) => m,
         Err(e) => {
@@ -30,11 +32,12 @@ pub extern "system" fn Java_com_parakeet_service_NativeLib_loadModel<'a>(
             return JNI_FALSE;
         }
     };
+    let load_duration = load_start.elapsed();
+    log::info!("Model loaded in {:.2?}", load_duration);
 
     match MODEL.lock() {
         Ok(mut guard) => {
             *guard = Some(model);
-            log::info!("Model loaded successfully");
             JNI_TRUE
         }
         Err(_) => {
@@ -58,22 +61,43 @@ pub extern "system" fn Java_com_parakeet_service_NativeLib_transcribe<'a>(
         }
     };
 
+    if audio_bytes.len() < 2 {
+        log::warn!("Audio buffer too small: {} bytes", audio_bytes.len());
+        return env.new_string("").unwrap();
+    }
+
     let samples = pcm_i16_to_f32(&audio_bytes);
+    let audio_duration_secs = samples.len() as f32 / 16000.0;
 
-    log::info!("Received {} PCM bytes ({} f32 samples)", audio_bytes.len(), samples.len());
+    log::info!(
+        "Received {} PCM bytes ({} samples, {:.2}s audio)",
+        audio_bytes.len(),
+        samples.len(),
+        audio_duration_secs
+    );
 
+    let infer_start = Instant::now();
     let text = match MODEL.lock() {
         Ok(mut guard) => match guard.as_mut() {
-            Some(model) => match model.transcribe(&samples, &transcribe_rs::TranscribeOptions::default()) {
-                Ok(result) => {
-                    log::info!("Transcription: {}", result.text);
-                    result.text
+            Some(model) => {
+                match model.transcribe(&samples, &transcribe_rs::TranscribeOptions::default()) {
+                    Ok(result) => {
+                        let infer_duration = infer_start.elapsed();
+                        let speedup = audio_duration_secs / infer_duration.as_secs_f32();
+                        log::info!(
+                            "Transcription ({:.2?}, {:.1}x realtime): \"{}\"",
+                            infer_duration,
+                            speedup,
+                            result.text
+                        );
+                        result.text
+                    }
+                    Err(e) => {
+                        log::error!("Transcription failed: {}", e);
+                        String::new()
+                    }
                 }
-                Err(e) => {
-                    log::error!("Transcription failed: {}", e);
-                    String::new()
-                }
-            },
+            }
             None => {
                 log::error!("Model not loaded");
                 String::new()
