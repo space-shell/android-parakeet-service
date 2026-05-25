@@ -19,6 +19,20 @@
             </intent-filter>
         </activity>
 
+        <service
+            android:name=".ParakeetRecognitionService"
+            android:exported="true"
+            android:label="Parakeet Voice Input"
+            android:permission="android.permission.RECORD_AUDIO">
+            <intent-filter>
+                <action android:name="android.speech.RecognitionService" />
+                <category android:name="android.intent.category.DEFAULT" />
+            </intent-filter>
+            <meta-data
+                android:name="android.speech.recognition_service"
+                android:value="com.parakeet.service" />
+        </service>
+
     </application>
 
 </manifest>
