@@ -35,8 +35,11 @@ Tooling: JDK 17, Android SDK 34, NDK 26.3.11579264, Rust (stable) with `aarch64-
 
 **Two-language project**: Kotlin (Android) + Rust (transcription engine via JNI).
 
-- **Kotlin layer** (`app/src/main/kotlin/com/parakeet/service/`): Implements `RecognitionService`, handles audio capture from microphone, manages the RecognitionService lifecycle, minimal settings UI via Jetpack Compose
-- **Rust layer** (`src/`): Compiles as a `cdylib` crate (`libparakeet_jni.so`), uses [transcribe-rs](https://github.com/cjpais/transcribe-rs) v0.3.11 (feature `onnx`, Parakeet engine) for ONNX inference. Bridged to Kotlin via JNI
+- **Kotlin layer** (`app/src/main/kotlin/com/parakeet/service/`):
+  - `ParakeetRecognitionService` — implements `RecognitionService`, captures audio via `AudioRecord` (16kHz mono 16-bit PCM), manages recording/inference lifecycle on background threads
+  - `NativeLib` — JNI bridge object, loads model, runs transcription, destroys model
+  - `MainActivity` — settings UI (Compose): model status card, voice input settings link, test transcription
+- **Rust layer** (`src/lib.rs`): Compiles as a `cdylib` crate (`libparakeet_jni.so`), uses [transcribe-rs](https://github.com/cjpais/transcribe-rs) v0.3.11 (feature `onnx`, Parakeet engine) for ONNX inference. JNI functions: `loadModel`, `transcribe` (PCM i16 → f32 conversion + inference), `destroy`. Model held in `static Mutex<Option<ParakeetModel>>`.
 - **Native libs** (`app/src/main/jniLibs/arm64-v8a/`): Rust `.so` built by `cargo-ndk`, populated during Gradle build via `copyRustSo` task
 - **Model assets** (`app/src/main/assets/`): Parakeet TDT int8 ONNX model (~670 MB total), auto-downloaded from [istupakov/parakeet-tdt-0.6b-v3-onnx](https://huggingface.co/istupakov/parakeet-tdt-0.6b-v3-onnx) at build time via `downloadModel` Gradle task
   - `encoder-model.int8.onnx` (652 MB)

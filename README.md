@@ -29,6 +29,37 @@ Unlike the reference app ([notune/android_transcribe_app](https://github.com/not
 - IME / keyboard input method
 - Live subtitles / captions
 - Real-time streaming transcription — batch only
+- Partial/interim results during recording
+
+## Setup
+
+1. Build and install the APK (see Building below)
+2. Open the app and tap **Open Voice Input Settings**
+3. Enable **Parakeet Voice Input** as the default voice input service
+4. Any app using `SpeechRecognizer` will now route through Parakeet
+
+## Testing
+
+### In-app test
+
+Open the app → tap **Run Test** to verify the pipeline with a generated test tone.
+
+### With Tasker
+
+1. Create a Tasker profile with your preferred trigger (e.g. volume long press)
+2. Add **Voice Recognize** action (uses system `SpeechRecognizer` under the hood)
+3. The transcription result is available as `%VOICE` in subsequent actions
+4. Use **AutoInput** → Text `%VOICE` to type into the active text field
+
+### Via ADB
+
+```bash
+# Trigger recognition
+adb shell am start -a android.speech.action.RECOGNIZE_SPEECH
+
+# Watch logs
+adb logcat -s ParakeetRecognition
+```
 
 ## Building
 
@@ -94,15 +125,18 @@ export STORE_PASS=yourpassword
 ├── app/
 │   └── src/main/
 │       ├── AndroidManifest.xml
-│       ├── kotlin/com/parakeet/service/   # Kotlin Android code
-│       ├── res/                           # Resources
-│       ├── assets/                        # Model files (downloaded at build time)
-│       └── jniLibs/arm64-v8a/             # libparakeet_jni.so (built by cargo-ndk)
-├── src/lib.rs                             # Rust JNI bridge + transcription
-├── Cargo.toml                             # Rust crate config
-├── flake.nix                              # Nix dev shell + FHS build env
-├── build.gradle.kts                       # Root Gradle config
-├── app/build.gradle.kts                   # App module (AGP 8.5.2, Kotlin 2.0.21)
+│       ├── kotlin/com/parakeet/service/
+│       │   ├── MainActivity.kt              # Settings UI (Compose)
+│       │   ├── ParakeetRecognitionService.kt # RecognitionService implementation
+│       │   └── NativeLib.kt                 # JNI bridge declarations
+│       ├── res/                              # Resources
+│       ├── assets/                           # Model files (downloaded at build time)
+│       └── jniLibs/arm64-v8a/               # libparakeet_jni.so (built by cargo-ndk)
+├── src/lib.rs                                # Rust JNI bridge + transcription
+├── Cargo.toml                                # Rust crate config
+├── flake.nix                                 # Nix dev shell + FHS build env
+├── build.gradle.kts                          # Root Gradle config
+├── app/build.gradle.kts                      # App module (AGP 8.5.2, Kotlin 2.0.21)
 └── settings.gradle.kts
 ```
 
