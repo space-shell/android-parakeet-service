@@ -9,6 +9,8 @@ import android.speech.RecognitionService
 import android.speech.RecognizerIntent
 import android.speech.SpeechRecognizer
 import android.util.Log
+import android.os.Handler
+import android.os.Looper
 import java.io.ByteArrayOutputStream
 import java.util.concurrent.atomic.AtomicBoolean
 
@@ -20,6 +22,10 @@ class ParakeetRecognitionService : RecognitionService() {
         private const val CHANNEL_CONFIG = AudioFormat.CHANNEL_IN_MONO
         private const val AUDIO_FORMAT = AudioFormat.ENCODING_PCM_16BIT
         private const val MAX_DURATION_SECS = 60
+
+        private const val VAD_THRESHOLD_RMS = 500.0f
+        private const val VAD_ONSET_FRAMES = 3
+        private const val VAD_HANGOVER_FRAMES = 50
     }
 
     private var audioRecord: AudioRecord? = null
@@ -29,6 +35,7 @@ class ParakeetRecognitionService : RecognitionService() {
     private val isRecording = AtomicBoolean(false)
     private val isProcessing = AtomicBoolean(false)
     private var modelLoaded = false
+    private var currentCallback: Callback? = null
 
     override fun onCreate() {
         super.onCreate()
@@ -42,6 +49,7 @@ class ParakeetRecognitionService : RecognitionService() {
 
     override fun onStartListening(intent: android.content.Intent, callback: Callback) {
         Log.d(TAG, "onStartListening")
+        currentCallback = callback
 
         if (checkSelfPermission(Manifest.permission.RECORD_AUDIO) != PackageManager.PERMISSION_GRANTED) {
             Log.e(TAG, "RECORD_AUDIO permission not granted")
@@ -97,15 +105,51 @@ class ParakeetRecognitionService : RecognitionService() {
 
             recordingThread = Thread {
                 val readBuffer = ShortArray(bufferSize / 2)
+                var speechOnsetCounter = 0
+                var inSpeech = false
+                var silenceCounter = 0
+                var speechDetected = false
+
                 while (isRecording.get()) {
                     val readCount = audioRecord?.read(readBuffer, 0, readBuffer.size) ?: 0
                     if (readCount > 0) {
                         val byteBuffer = ByteArray(readCount * 2)
+                        var sumSquares = 0.0
                         for (i in 0 until readCount) {
                             val sample = readBuffer[i]
                             byteBuffer[i * 2] = (sample.toInt() and 0xFF).toByte()
                             byteBuffer[i * 2 + 1] = (sample.toInt() shr 8).toByte()
+                            sumSquares += sample.toDouble() * sample.toDouble()
                         }
+                        val rms = Math.sqrt(sumSquares / readCount).toFloat()
+
+                        val isSpeechFrame = rms > VAD_THRESHOLD_RMS
+
+                        if (!inSpeech) {
+                            if (isSpeechFrame) {
+                                speechOnsetCounter++
+                                if (speechOnsetCounter >= VAD_ONSET_FRAMES) {
+                                    inSpeech = true
+                                    speechDetected = true
+                                    silenceCounter = 0
+                                    Log.d(TAG, "Speech onset detected (rms=$rms)")
+                                }
+                            } else {
+                                speechOnsetCounter = 0
+                            }
+                        } else {
+                            if (isSpeechFrame) {
+                                silenceCounter = 0
+                            } else {
+                                silenceCounter++
+                                if (silenceCounter >= VAD_HANGOVER_FRAMES) {
+                                    inSpeech = false
+                                    Log.d(TAG, "Silence detected after speech (${silenceCounter} frames), auto-stopping")
+                                    isRecording.set(false)
+                                }
+                            }
+                        }
+
                         synchronized(this) {
                             val buf = audioBuffer
                             if (buf != null && buf.size() < maxBytes) {
@@ -120,7 +164,18 @@ class ParakeetRecognitionService : RecognitionService() {
                         break
                     }
                 }
-                Log.d(TAG, "Recording thread finished")
+
+                if (speechDetected) {
+                    Log.d(TAG, "Recording finished with speech captured, triggering transcription")
+                    Handler(Looper.getMainLooper()).post { performTranscription() }
+                } else {
+                    Log.d(TAG, "No speech detected during recording")
+                    Handler(Looper.getMainLooper()).post {
+                        currentCallback?.let { returnEmptyResult(it) }
+                        releaseAudioRecord()
+                        isProcessing.set(false)
+                    }
+                }
             }.also { it.name = "parakeet-audio-capture"; it.start() }
         } catch (e: SecurityException) {
             Log.e(TAG, "SecurityException during audio recording", e)
@@ -136,9 +191,8 @@ class ParakeetRecognitionService : RecognitionService() {
     }
 
     override fun onStopListening(callback: Callback) {
-        Log.d(TAG, "onStopListening")
+        Log.d(TAG, "onStopListening (manual)")
         isRecording.set(false)
-
         recordingThread?.join(3000)
         if (recordingThread?.isAlive == true) {
             Log.w(TAG, "Recording thread did not finish in time")
@@ -149,6 +203,18 @@ class ParakeetRecognitionService : RecognitionService() {
         try {
             audioRecord?.stop()
         } catch (_: Exception) {}
+
+        performTranscription()
+    }
+
+    private fun performTranscription() {
+        val callback = currentCallback
+        if (callback == null) {
+            Log.e(TAG, "No callback available for transcription")
+            releaseAudioRecord()
+            isProcessing.set(false)
+            return
+        }
 
         val audioData: ByteArray
         synchronized(this) {
@@ -209,6 +275,7 @@ class ParakeetRecognitionService : RecognitionService() {
         recordingThread = null
         releaseAudioRecord()
         isProcessing.set(false)
+        currentCallback = null
     }
 
     override fun onDestroy() {
@@ -225,6 +292,7 @@ class ParakeetRecognitionService : RecognitionService() {
 
         releaseAudioRecord()
         NativeLib.destroy()
+        currentCallback = null
         super.onDestroy()
     }
 
