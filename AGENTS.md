@@ -50,6 +50,7 @@ Tooling: JDK 17, Android SDK 34, NDK 26.3.11579264, Rust (stable) with `aarch64-
 - **Min SDK**: API 31 (Android 12)
 - **Target/Compile SDK**: 34
 - **Transcription mode**: Batch/offline only — record audio segment, then transcribe
+- **VAD**: Energy-based voice activity detection — auto-stops recording after ~1.5s of silence following detected speech. No extra model required.
 
 ### Key Android integration points
 
