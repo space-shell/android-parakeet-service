@@ -17,11 +17,42 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
+      - name: Maximize disk space
+        uses: jlumbroso/free-disk-space@v1.3.1
+        with:
+          tool-cache: false
+          android: false
+          dotnet: true
+          haskell: true
+          large-packages: true
+          docker-images: true
+          swap-storage: true
+
       - name: Install Nix
         uses: cachix/install-nix-action@v25
         with:
           extra_nix_config: |
             experimental-features = nix-command flakes
+
+      - name: Cache Nix store
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cache/nix
+            /nix/store
+          key: nix-${{ runner.os }}-${{ hashFiles('flake.lock', 'flake.nix') }}
+          restore-keys: |
+            nix-${{ runner.os }}-
+
+      - name: Cache Gradle
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.gradle/caches
+            ~/.gradle/wrapper
+          key: gradle-${{ hashFiles('**/*.gradle.kts', 'gradle/wrapper/gradle-wrapper.properties') }}
+          restore-keys: |
+            gradle-
 
       - name: Cache model assets
         uses: actions/cache@v4
@@ -30,6 +61,14 @@ jobs:
           key: model-assets-${{ hashFiles('app/build.gradle.kts') }}
           restore-keys: |
             model-assets-
+
+      - name: Cache Rust target
+        uses: actions/cache@v4
+        with:
+          path: target
+          key: rust-${{ runner.os }}-aarch64-${{ hashFiles('Cargo.toml', 'Cargo.lock', 'src/lib.rs') }}
+          restore-keys: |
+            rust-${{ runner.os }}-aarch64-
 
       - name: Build debug APK
         run: nix develop --command bash -c 'android-build-env -c "./gradlew assembleDebug"'

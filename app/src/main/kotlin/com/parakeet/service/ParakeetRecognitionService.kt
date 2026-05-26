@@ -10,7 +10,6 @@ import android.speech.RecognizerIntent
 import android.speech.SpeechRecognizer
 import android.util.Log
 import java.io.ByteArrayOutputStream
-import java.io.File
 import java.util.concurrent.atomic.AtomicBoolean
 
 class ParakeetRecognitionService : RecognitionService() {
@@ -30,55 +29,15 @@ class ParakeetRecognitionService : RecognitionService() {
     private val isRecording = AtomicBoolean(false)
     private val isProcessing = AtomicBoolean(false)
     private var modelLoaded = false
-    private var modelDir: File? = null
 
     override fun onCreate() {
         super.onCreate()
-        Thread { loadModel() }.start()
-    }
-
-    private fun loadModel() {
-        try {
-            val dir = File(filesDir, "parakeet-model")
-            if (!dir.exists()) {
-                dir.mkdirs()
-                copyModelAssets(dir)
-            }
-            modelDir = dir
-            val success = NativeLib.loadModel(dir.absolutePath)
+        Thread {
+            val success = ModelManager.loadModel(this)
             synchronized(this) {
                 modelLoaded = success
             }
-            if (success) {
-                Log.i(TAG, "Model loaded successfully")
-            } else {
-                Log.e(TAG, "Model load failed")
-            }
-        } catch (e: Exception) {
-            Log.e(TAG, "Error loading model", e)
-        }
-    }
-
-    private fun copyModelAssets(targetDir: File) {
-        val modelFiles = listOf(
-            "encoder-model.int8.onnx",
-            "decoder_joint-model.int8.onnx",
-            "nemo128.onnx",
-            "vocab.txt"
-        )
-        for (filename in modelFiles) {
-            val target = File(targetDir, filename)
-            if (target.exists() && target.length() > 0) {
-                Log.d(TAG, "SKIP (exists): $filename")
-                continue
-            }
-            assets.open(filename).use { input ->
-                target.outputStream().use { output ->
-                    input.copyTo(output)
-                }
-            }
-            Log.d(TAG, "Copied model asset: $filename (${target.length()} bytes)")
-        }
+        }.start()
     }
 
     override fun onStartListening(intent: android.content.Intent, callback: Callback) {

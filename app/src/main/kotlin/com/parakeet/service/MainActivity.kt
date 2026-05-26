@@ -16,7 +16,6 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.material3.Button
-import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.CircularProgressIndicator
@@ -61,10 +60,15 @@ fun MainScreen() {
     var testResult by remember { mutableStateOf<String?>(null) }
     var isTesting by remember { mutableStateOf(false) }
 
-    Thread {
-        val loaded = tryLoadModel(context)
-        modelStatus = if (loaded) ModelStatus.READY else ModelStatus.FAILED
-    }.start()
+    fun loadModel() {
+        modelStatus = ModelStatus.LOADING
+        Thread {
+            val loaded = ModelManager.loadModel(context)
+            modelStatus = if (loaded) ModelStatus.READY else ModelStatus.FAILED
+        }.start()
+    }
+
+    loadModel()
 
     Scaffold(
         topBar = {
@@ -85,7 +89,10 @@ fun MainScreen() {
                 .fillMaxSize(),
             verticalArrangement = Arrangement.spacedBy(16.dp),
         ) {
-            ModelStatusCard(modelStatus)
+            ModelStatusCard(
+                status = modelStatus,
+                onRetry = { loadModel() },
+            )
             VoiceInputCard(context)
             TestTranscriptionCard(
                 modelStatus = modelStatus,
@@ -114,7 +121,7 @@ fun MainScreen() {
 }
 
 @Composable
-fun ModelStatusCard(status: ModelStatus) {
+fun ModelStatusCard(status: ModelStatus, onRetry: () -> Unit) {
     Card(
         modifier = Modifier.fillMaxWidth(),
         colors = CardDefaults.cardColors(
@@ -125,30 +132,47 @@ fun ModelStatusCard(status: ModelStatus) {
             }
         )
     ) {
-        Row(
-            modifier = Modifier
-                .fillMaxWidth()
-                .padding(16.dp),
-            verticalAlignment = Alignment.CenterVertically,
-        ) {
-            when (status) {
-                ModelStatus.LOADING -> {
-                    CircularProgressIndicator(
-                        modifier = Modifier.size(24.dp),
-                        strokeWidth = 2.dp,
-                    )
-                    Spacer(modifier = Modifier.width(12.dp))
-                    Text("Loading model...", style = MaterialTheme.typography.bodyLarge)
+        Column(modifier = Modifier.padding(16.dp)) {
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                when (status) {
+                    ModelStatus.LOADING -> {
+                        CircularProgressIndicator(
+                            modifier = Modifier.size(24.dp),
+                            strokeWidth = 2.dp,
+                        )
+                        Spacer(modifier = Modifier.width(12.dp))
+                        Text("Loading model...", style = MaterialTheme.typography.bodyLarge)
+                    }
+                    ModelStatus.READY -> {
+                        Text(
+                            "●",
+                            color = MaterialTheme.colorScheme.tertiary,
+                            style = MaterialTheme.typography.titleLarge
+                        )
+                        Spacer(modifier = Modifier.width(8.dp))
+                        Text("Model ready", style = MaterialTheme.typography.bodyLarge)
+                    }
+                    ModelStatus.FAILED -> {
+                        Text(
+                            "●",
+                            color = MaterialTheme.colorScheme.error,
+                            style = MaterialTheme.typography.titleLarge
+                        )
+                        Spacer(modifier = Modifier.width(8.dp))
+                        Text("Model failed to load", style = MaterialTheme.typography.bodyLarge)
+                    }
                 }
-                ModelStatus.READY -> {
-                    Text("●", color = MaterialTheme.colorScheme.tertiary, style = MaterialTheme.typography.titleLarge)
-                    Spacer(modifier = Modifier.width(8.dp))
-                    Text("Model ready", style = MaterialTheme.typography.bodyLarge)
-                }
-                ModelStatus.FAILED -> {
-                    Text("●", color = MaterialTheme.colorScheme.error, style = MaterialTheme.typography.titleLarge)
-                    Spacer(modifier = Modifier.width(8.dp))
-                    Text("Model failed to load", style = MaterialTheme.typography.bodyLarge)
+            }
+            if (status == ModelStatus.FAILED) {
+                Spacer(modifier = Modifier.height(12.dp))
+                OutlinedButton(
+                    onClick = onRetry,
+                    modifier = Modifier.fillMaxWidth(),
+                ) {
+                    Text("Retry")
                 }
             }
         }
@@ -203,25 +227,19 @@ fun TestTranscriptionCard(
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
             )
             Spacer(modifier = Modifier.height(12.dp))
-            Row(
-                modifier = Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.spacedBy(8.dp),
-                verticalAlignment = Alignment.CenterVertically,
+            OutlinedButton(
+                onClick = onTest,
+                enabled = modelStatus == ModelStatus.READY && !isTesting,
             ) {
-                OutlinedButton(
-                    onClick = onTest,
-                    enabled = modelStatus == ModelStatus.READY && !isTesting,
-                ) {
-                    if (isTesting) {
-                        CircularProgressIndicator(
-                            modifier = Modifier.size(16.dp),
-                            strokeWidth = 2.dp,
-                        )
-                        Spacer(modifier = Modifier.width(8.dp))
-                        Text("Running...")
-                    } else {
-                        Text("Run Test")
-                    }
+                if (isTesting) {
+                    CircularProgressIndicator(
+                        modifier = Modifier.size(16.dp),
+                        strokeWidth = 2.dp,
+                    )
+                    Spacer(modifier = Modifier.width(8.dp))
+                    Text("Running...")
+                } else {
+                    Text("Run Test")
                 }
             }
             if (testResult != null) {
@@ -246,31 +264,6 @@ fun TestTranscriptionCard(
                 }
             }
         }
-    }
-}
-
-private fun tryLoadModel(context: android.content.Context): Boolean {
-    return try {
-        val modelDir = java.io.File(context.filesDir, "parakeet-model")
-        if (!modelDir.exists()) {
-            modelDir.mkdirs()
-            val modelFiles = listOf(
-                "encoder-model.int8.onnx",
-                "decoder_joint-model.int8.onnx",
-                "nemo128.onnx",
-                "vocab.txt"
-            )
-            for (filename in modelFiles) {
-                context.assets.open(filename).use { input ->
-                    java.io.File(modelDir, filename).outputStream().use { output ->
-                        input.copyTo(output)
-                    }
-                }
-            }
-        }
-        NativeLib.loadModel(modelDir.absolutePath)
-    } catch (e: Exception) {
-        false
     }
 }
 
