@@ -115,12 +115,27 @@ val copyRustSo by tasks.registering(Copy::class) {
     into(jniLibsDir)
 }
 
+val copyNdkCppLib by tasks.registering(Copy::class) {
+    description = "Copy libc++_shared.so from NDK into jniLibs"
+    val ndkHome = System.getenv("ANDROID_NDK_HOME") ?: System.getenv("NDK_HOME") ?: ""
+    val toolchain = if (System.getProperty("os.name").lowercase().contains("linux")) {
+        "linux-x86_64"
+    } else {
+        "darwin-x86_64"
+    }
+    from("$ndkHome/toolchains/llvm/prebuilt/$toolchain/sysroot/usr/lib/aarch64-linux-android/libc++_shared.so")
+    into(jniLibsDir)
+    onlyIf { ndkHome.isNotEmpty() }
+}
+
 tasks.matching { it.name.startsWith("merge") && it.name.endsWith("JniLibFolders") }.configureEach {
     dependsOn(copyRustSo)
+    dependsOn(copyNdkCppLib)
 }
 
 tasks.matching { it.name == "preBuild" }.configureEach {
     dependsOn(copyRustSo)
+    dependsOn(copyNdkCppLib)
 }
 
 dependencies {
